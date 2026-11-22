@@ -1,0 +1,23 @@
+{
+  "name": "paoya",
+  "version": "2.0.0",
+  "description": "เป๋ายา (PAOYA) - ผู้ช่วยดูแลเรื่องยา พร้อม backend",
+  "main": "server/index.js",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "reset-medicines": "node --disable-warning=ExperimentalWarning server/db.js --reset-medicines",
+    "check-ai": "node scripts/check-ai.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "jsonwebtoken": "^9.0.3"
+  }
+}
