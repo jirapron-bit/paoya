@@ -55,8 +55,110 @@ function AddToMyMedsModal({ medicine, onClose, onSaved }) {
   );
 }
 
+// ข้อมูลการใช้ยา (สรุปโดย AI) — บัญชียาหลักไม่มีข้อมูลว่าใช้รักษาอะไร/กินอย่างไร จึงให้ AI สรุปให้
+function useMedicineAIInfo(id) {
+  const [state, setState] = useState({ loading: true, info: null, error: '', enabled: true, disclaimer: '' });
+  const load = useCallback(async () => {
+    if (!id) return;
+    setState((s) => ({ ...s, loading: true, error: '' }));
+    try {
+      const data = await api.get(`/ai/medicine-info/${id}`);
+      setState({ loading: false, info: data.info, error: '', enabled: data.enabled !== false, disclaimer: data.disclaimer || '' });
+    } catch (err) {
+      setState({ loading: false, info: null, error: err.message, enabled: true, disclaimer: '' });
+    }
+  }, [id]);
+  useEffect(() => { load(); }, [load]);
+  const info = state.info && state.info.known ? state.info : null;
+  return { ...state, info, reload: load };
+}
+
+// ข้อความหลายบรรทัด → แสดงเป็นข้อ ๆ
+function InfoText({ text }) {
+  const lines = String(text || '').split('\n').map((l) => l.replace(/^\s*[-•*\d.)]+\s*/, '').trim()).filter(Boolean);
+  if (lines.length <= 1) return <p className="text-sm text-gray-700 leading-relaxed">{lines[0]}</p>;
+  return (
+    <ul className="space-y-1">
+      {lines.map((l, i) => (
+        <li key={i} className="text-sm text-gray-700 leading-relaxed flex gap-2"><span className="text-[#2D7A4C] font-bold">•</span><span>{l}</span></li>
+      ))}
+    </ul>
+  );
+}
+
+const SECTION_TONES = {
+  plain: 'bg-white border-gray-100',
+  green: 'bg-green-50 border-green-100',
+  blue: 'bg-blue-50 border-blue-100',
+  warn: 'bg-amber-50 border-amber-200',
+  danger: 'bg-red-50 border-red-200',
+};
+function DrugSection({ icon, title, text, tone = 'plain', badge, children }) {
+  if (!text && !children) return null;
+  return (
+    <div className={`rounded-2xl border p-3.5 ${SECTION_TONES[tone]}`}>
+      <h4 className="font-bold text-gray-900 text-sm mb-1.5 flex items-center gap-1.5">
+        {icon && <Icon name={icon} className="w-4 h-4 text-[#2D7A4C]" />} {title}
+        {badge && <span className="ml-auto text-[10px] font-medium text-gray-500 bg-white/70 border border-gray-200 px-1.5 py-0.5 rounded-full">{badge}</span>}
+      </h4>
+      {text && <InfoText text={text} />}
+      {children}
+    </div>
+  );
+}
+
+// การ์ดชื่อยา: ชื่อสามัญ / ชื่อไทย / ชื่อวิทยาศาสตร์ / ชื่อการค้า / กลุ่มยา
+function DrugNamesCard({ m, ai }) {
+  const rows = [
+    ['ชื่อเรียกทั่วไป', ai.info?.commonName],
+    ['ชื่อสามัญ', m.genericName],
+    ['ชื่อภาษาไทย', ai.info?.thaiName],
+    ['ชื่อวิทยาศาสตร์', ai.info?.scientificName],
+    ['ชื่อการค้า', ai.info?.brandNames],
+    ['กลุ่มยา', [ai.info?.drugClass, m.subgroup].filter(Boolean).join('\n')],
+  ].filter(([, v]) => v);
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-100">
+      {rows.map(([k, v]) => (
+        <div key={k} className="flex gap-3 px-3.5 py-2.5">
+          <span className="text-xs font-bold text-gray-500 flex-shrink-0 pt-0.5" style={{ width: '6.5rem' }}>{k}</span>
+          <span className="text-sm text-gray-800 leading-relaxed whitespace-pre-line break-words min-w-0">{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AIStatusNote({ ai }) {
+  if (ai.loading) {
+    return (
+      <div className="rounded-2xl border border-green-100 bg-green-50/50 p-4 space-y-2 animate-pulse">
+        <p className="text-sm font-bold text-[#2D7A4C] flex items-center gap-1.5"><Icon name="sparkles" className="w-4 h-4" /> กำลังสรุปข้อมูลยา (สรรพคุณ ข้อบ่งใช้ ข้อควรระวัง)...</p>
+        <div className="h-3 bg-green-100 rounded w-3/4" /><div className="h-3 bg-green-100 rounded w-1/2" />
+      </div>
+    );
+  }
+  if (ai.error) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3.5 space-y-2">
+        <p className="text-sm text-amber-800">{ai.error}</p>
+        <Button size="sm" variant="outline" onClick={ai.reload}>ลองใหม่</Button>
+      </div>
+    );
+  }
+  if (!ai.enabled) {
+    return <div className="rounded-2xl border border-gray-200 bg-white p-3.5 text-sm text-gray-600">ยังไม่ได้เปิดใช้ AI จึงแสดงได้เฉพาะข้อมูลจากบัญชียาหลัก ถามเภสัชกรประจำร้านยาเพิ่มเติมได้</div>;
+  }
+  if (!ai.info) {
+    return <div className="rounded-2xl border border-gray-200 bg-white p-3.5 text-sm text-gray-600">AI ยังไม่มีข้อมูลที่มั่นใจสำหรับยานี้ แนะนำให้สอบถามแพทย์หรือเภสัชกร</div>;
+  }
+  return null;
+}
+
 function MedicineDetailScreen({ medicineId, goBack, openMedicine, askAI }) {
   const { data, loading, error, setData } = useApi(`/medicines/${medicineId}`);
+  const ai = useMedicineAIInfo(data?.medicine?.id);
+  const aiInfo = ai.info;
   const [showAdd, setShowAdd] = useState(false);
   const m = data?.medicine;
 
@@ -82,16 +184,44 @@ function MedicineDetailScreen({ medicineId, goBack, openMedicine, askAI }) {
           <AllergyBanner warnings={data.allergyWarnings} />
 
           <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-sm">
-            <h3 className="text-xl font-bold text-gray-900">{m.genericName}</h3>
-            <p className="text-sm text-gray-600 mt-1">
-              {m.dosageForm || '-'}{m.strength && m.strength !== 'ไม่ระบุ' ? ` • ${m.strength}` : ''}
-            </p>
+            {/* หัวข้อใหญ่ = ชื่อที่คนทั่วไปเข้าใจ (จาก AI) ถ้ายังไม่มีใช้ชื่อสามัญ */}
+            {aiInfo?.commonName || aiInfo?.thaiName ? (
+              <>
+                <h3 className="text-2xl font-bold text-gray-900 leading-tight">{aiInfo.commonName || aiInfo.thaiName}</h3>
+                {aiInfo.oneLine && (
+                  <p className="text-base text-[#2D7A4C] font-bold mt-1.5 leading-snug flex gap-1.5">
+                    <Icon name="pill" className="w-5 h-5 flex-shrink-0 mt-0.5" /> <span>{aiInfo.oneLine}</span>
+                  </p>
+                )}
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <p className="text-sm font-bold text-gray-800">
+                    {aiInfo.thaiName && aiInfo.thaiName !== aiInfo.commonName ? `${aiInfo.thaiName} · ` : ''}{m.genericName}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {m.dosageForm || '-'}{m.strength && m.strength !== 'ไม่ระบุ' ? ` • ${m.strength}` : ''}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className="text-xl font-bold text-gray-900">{m.genericName}</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  {m.dosageForm || '-'}{m.strength && m.strength !== 'ไม่ระบุ' ? ` • ${m.strength}` : ''}
+                </p>
+              </>
+            )}
             <div className="mt-3">
               <SpeakButton id={`med-${m.id}`} text={() => [
-                `ยา ${m.genericName}`, m.dosageForm && `รูปแบบ ${m.dosageForm}`, m.strength && m.strength !== 'ไม่ระบุ' && `ความแรง ${m.strength}`,
-                m.subgroup && `กลุ่มยา ${m.subgroup}`, m.conditions && m.conditions !== 'ไม่มีเงื่อนไข' && `เงื่อนไขการใช้ ${m.conditions}`,
-                m.remarks && m.remarks !== 'ไม่มี' && `คำเตือน ${m.remarks}`,
+                aiInfo?.commonName, aiInfo?.oneLine, `ชื่อยา ${aiInfo?.thaiName || m.genericName}`, m.dosageForm && `รูปแบบ ${m.dosageForm}`, m.strength && m.strength !== 'ไม่ระบุ' && `ความแรง ${m.strength}`,
                 data.allergyWarnings?.length ? 'คำเตือน คุณเคยบันทึกว่าแพ้ยานี้' : '',
+                aiInfo?.drugClass && `กลุ่มยา ${aiInfo.drugClass}`,
+                aiInfo?.properties && `สรรพคุณ ${aiInfo.properties}`,
+                aiInfo?.indications && `ข้อบ่งใช้ ${aiInfo.indications}`,
+                aiInfo?.howToUse && `วิธีใช้ ${aiInfo.howToUse}`,
+                m.conditions && m.conditions !== 'ไม่มีเงื่อนไข' && `เงื่อนไขการใช้ยา ${m.conditions}`,
+                aiInfo?.contraindications && `ข้อห้ามใช้ ${aiInfo.contraindications}`,
+                aiInfo?.cautions && `ข้อควรระวัง ${aiInfo.cautions}`,
+                m.remarks && m.remarks !== 'ไม่มี' && `หมายเหตุ ${m.remarks}`,
               ].filter(Boolean).join('. ')} />
             </div>
             <div className="flex flex-wrap gap-1.5 mt-3">
@@ -100,13 +230,34 @@ function MedicineDetailScreen({ medicineId, goBack, openMedicine, askAI }) {
             </div>
           </div>
 
-          <InfoBlock title="กลุ่มยา">{m.subgroup || '-'}</InfoBlock>
-          <InfoBlock title="เงื่อนไขการใช้ยา" tone={m.conditions && m.conditions !== 'ไม่มีเงื่อนไข' ? 'warn' : 'plain'}>
-            {m.conditions || 'ไม่มีเงื่อนไข'}
-          </InfoBlock>
-          <InfoBlock title="คำเตือน / หมายเหตุ" tone={m.remarks && m.remarks !== 'ไม่มี' ? 'warn' : 'plain'}>
-            {m.remarks || 'ไม่มี'}
-          </InfoBlock>
+          <DrugNamesCard m={m} ai={ai} />
+          <AIStatusNote ai={ai} />
+
+          <DrugSection icon="sparkles" title="สรรพคุณยา" text={aiInfo?.properties} tone="green" />
+          <DrugSection icon="pill" title="ข้อบ่งใช้" text={aiInfo?.indications} tone="green" />
+          <DrugSection icon="clock" title="วิธีใช้ / ขนาดยาทั่วไป (ผู้ใหญ่)" text={aiInfo?.howToUse} tone="blue" />
+          <DrugSection icon="check-circle" title="เงื่อนไขการใช้ยา" badge="บัญชียาหลัก"
+            text={m.conditions || 'ไม่มีเงื่อนไข'} tone={m.conditions && m.conditions !== 'ไม่มีเงื่อนไข' ? 'warn' : 'plain'} />
+          <DrugSection icon="x" title="ข้อห้ามใช้" text={aiInfo?.contraindications} tone="danger" />
+          <DrugSection icon="alert-triangle" title="ข้อควรระวัง / คำเตือน" text={aiInfo?.cautions} tone="warn">
+            {m.remarks && m.remarks !== 'ไม่มี' && (
+              <p className={`text-sm text-gray-700 leading-relaxed ${aiInfo?.cautions ? 'mt-2 pt-2 border-t border-amber-200' : ''}`}>
+                <span className="font-bold">หมายเหตุจากบัญชียาหลัก:</span> {m.remarks.replace(/^\s*หมายเหตุ\s*:\s*/, '')}
+              </p>
+            )}
+          </DrugSection>
+          <DrugSection icon="info" title="ผลข้างเคียง" text={aiInfo?.sideEffects} />
+          <DrugSection icon="alert-circle" title="ยา/อาหารที่ไม่ควรใช้ร่วมกัน" text={aiInfo?.interactions} />
+          <DrugSection icon="heart" title="หญิงตั้งครรภ์และให้นมบุตร" text={aiInfo?.pregnancy} />
+          <DrugSection icon="package" title="การเก็บรักษา" text={aiInfo?.storage} />
+          <DrugSection icon="sparkles" title="คำแนะนำเพิ่มเติม" text={aiInfo?.tips} />
+          {aiInfo && (
+            <p className="text-[11px] text-gray-400 px-1 flex gap-1">
+              <Icon name="sparkles" className="w-3 h-3 flex-shrink-0 mt-0.5" />
+              <span>ชื่อภาษาไทย ชื่อวิทยาศาสตร์ ชื่อการค้า สรรพคุณ ข้อบ่งใช้ วิธีใช้ ข้อห้ามใช้ และข้อควรระวัง สรุปโดย AI จากข้อมูลยามาตรฐาน {ai.disclaimer} ถ้าแพทย์สั่งวิธีใช้ต่างจากนี้ ให้ทำตามแพทย์</span>
+            </p>
+          )}
+
           <InfoBlock title="ข้อมูลบัญชียาหลัก">
             {accountText(m.accountNew)}{m.accountOld ? ` (เดิม: บัญชี ${m.accountOld})` : ''}{'\n'}
             การเปลี่ยนแปลง: {m.changeDetail || '-'}{m.changeCode ? ` [${m.changeCode}]` : ''}{'\n'}

@@ -90,7 +90,7 @@ function explainOpenAI(status, bodyText) {
 // โมเดลบางรุ่นใส่ <think>...</think> มาด้วย ตัดออก
 const stripThinking = (s) => String(s || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
-async function callOpenAICompatible({ system, contents, json }) {
+async function callOpenAICompatible({ system, contents, json, maxTokens }) {
   const p = provider();
   const preset = PRESETS[p];
   const key = clean(preset.key());
@@ -109,7 +109,7 @@ async function callOpenAICompatible({ system, contents, json }) {
           model,
           messages,
           temperature: 0.3,
-          max_tokens: 1500,
+          max_tokens: maxTokens || 1500,
           ...(json ? { response_format: { type: 'json_object' } } : {}),
         }),
         signal: AbortSignal.timeout(45000),

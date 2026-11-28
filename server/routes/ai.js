@@ -13,6 +13,16 @@ const chatLimit = rateLimit({ windowMs: 10 * 60 * 1000, max: Number(process.env.
 const scanLimit = rateLimit({ windowMs: 10 * 60 * 1000, max: Number(process.env.AI_SCAN_LIMIT) || 20, key: (req) => `u${req.userId}`, message: 'สแกนบ่อยเกินไป' });
 const { callAI, hasAI, aiInfo } = require('../llm');
 
+// เก็บผลสรุปข้อมูลยาจาก AI ไว้ (ยาตัวเดียวกันถามครั้งเดียว ประหยัดโควตา และเปิดเร็วขึ้น)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS medicine_ai_info (
+    cache_key TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+const infoLimit = rateLimit({ windowMs: 10 * 60 * 1000, max: 40, key: (req) => `u${req.userId}`, message: 'ขอข้อมูลยาบ่อยเกินไป' });
+
 const DISCLAIMER = 'ข้อมูลนี้เป็นคำแนะนำทั่วไป ไม่ใช่การวินิจฉัย หากอาการรุนแรงหรือไม่แน่ใจ โปรดปรึกษาแพทย์หรือเภสัชกร';
 
 // ข้อมูลสุขภาพของผู้ใช้ ให้ AI ตอบได้ตรงตัวมากขึ้น
@@ -163,6 +173,76 @@ router.post('/scan', scanLimit, async (req, res) => {
     ? allergyMatches(allergies, result.drugName).map((a) => ({ drugName: a.drug_name, symptom: a.symptom, severity: a.severity }))
     : [];
   res.json({ mode: 'ai', result, matches, allergyWarnings, disclaimer: DISCLAIMER });
+});
+
+// สรุปข้อมูลการใช้ยาด้วย AI สำหรับหน้ารายละเอียดยา: GET /api/ai/medicine-info/:id
+router.get('/medicine-info/:id', infoLimit, async (req, res) => {
+  const row = db.prepare('SELECT * FROM medicines WHERE id = ?').get(Number(req.params.id));
+  if (!row) throw new HttpError(404, 'ไม่พบข้อมูลยา');
+  // v3 = เพิ่มชื่อที่คนทั่วไปเรียก + สรุปสั้นว่าใช้ทำอะไร; v2 = ข้อมูลแบบละเอียด (ชื่อวิทยาศาสตร์ ชื่อการค้า สรรพคุณ ข้อบ่งใช้ ข้อห้ามใช้ ฯลฯ)
+  const key = `${row.generic_name.toLowerCase()}|${String(row.dosage_form || '').toLowerCase()}|v3`;
+  const cached = db.prepare('SELECT data, created_at FROM medicine_ai_info WHERE cache_key = ?').get(key);
+  if (cached) return res.json({ info: parseJSON(cached.data, null), cached: true, disclaimer: DISCLAIMER });
+  if (!hasAI()) return res.json({ info: null, enabled: false });
+
+  const system = `คุณคือเภสัชกรไทย ให้ข้อมูลยาทั่วไปตามเอกสารกำกับยามาตรฐาน ตอบเป็น JSON ภาษาไทยเท่านั้น (ยกเว้นชื่อยาภาษาอังกฤษ) เขียนสั้น ชัด เข้าใจง่ายสำหรับผู้สูงอายุ
+กติกา:
+- ถ้าไม่รู้จักยานี้หรือไม่แน่ใจ ให้ "known": false และเว้นช่องอื่นว่าง ห้ามเดา
+- ช่องไหนไม่แน่ใจ ให้เว้นว่าง "" ดีกว่าเดา โดยเฉพาะ scientificName และ brandNames
+- howToUse: ขนาดยาทั่วไปสำหรับผู้ใหญ่ตามรูปแบบยา ถ้าเป็นยาที่แพทย์ต้องปรับขนาดเฉพาะคน (เช่น ยาความดัน เบาหวาน ยาฆ่าเชื้อ ยาจิตเวช ยาฉีด ยาเคมีบำบัด) ให้เขียน "ใช้ตามขนาดที่แพทย์สั่ง" พร้อมข้อปฏิบัติทั่วไป
+- ห้ามระบุขนาดยาเด็ก ให้แนะนำปรึกษาแพทย์/เภสัชกร
+- ช่องที่เป็นรายการ ให้คั่นแต่ละข้อด้วยการขึ้นบรรทัดใหม่ (\\n) ไม่เกิน 5 ข้อ ข้อละไม่เกิน 1 ประโยค
+- ช่องอื่นไม่เกิน 3 ประโยค`;
+  const prompt = `ยา: ${row.generic_name}
+รูปแบบยา: ${row.dosage_form || '-'}${row.strength && row.strength !== 'ไม่ระบุ' ? `\nความแรง: ${row.strength}` : ''}
+กลุ่มยา: ${row.subgroup || row.main_group || '-'}
+ตอบ JSON:
+{"known":true,
+"commonName":"ชื่อที่คนไทยทั่วไปเรียกยานี้ สั้น ๆ เข้าใจง่าย เช่น ยาพารา, ยาแก้แพ้, ยาลดกรด, ยาฆ่าเชื้อ (ห้ามใช้ศัพท์แพทย์)",
+"oneLine":"ประโยคเดียวสั้น ๆ ว่ายานี้ใช้ทำอะไร ภาษาชาวบ้าน เช่น ใช้ลดไข้ แก้ปวดหัว ปวดฟัน ปวดเมื่อย",
+"thaiName":"ชื่อยาภาษาไทย (ทับศัพท์) เช่น พาราเซตามอล",
+"scientificName":"ชื่อทางเคมี/ชื่อวิทยาศาสตร์ (IUPAC) ภาษาอังกฤษ",
+"brandNames":"ชื่อการค้าที่พบบ่อยในไทย คั่นด้วยจุลภาค",
+"drugClass":"กลุ่มยาแบบเข้าใจง่าย เช่น ยาแก้ปวดลดไข้",
+"properties":"สรรพคุณ: ยาออกฤทธิ์อย่างไร (อธิบายง่าย ๆ)",
+"indications":"ข้อบ่งใช้: ใช้รักษาโรค/อาการอะไร (รายการ)",
+"howToUse":"วิธีใช้และขนาดยาทั่วไปสำหรับผู้ใหญ่",
+"contraindications":"ข้อห้ามใช้: ห้ามใช้ในใคร (รายการ)",
+"cautions":"ข้อควรระวัง/คำเตือน (รายการ)",
+"sideEffects":"ผลข้างเคียงที่พบบ่อย และอาการที่ต้องหยุดยาแล้วไปพบแพทย์ (รายการ)",
+"interactions":"ยาหรืออาหารที่ไม่ควรใช้ร่วมกัน (รายการ)",
+"pregnancy":"หญิงตั้งครรภ์และให้นมบุตร",
+"storage":"การเก็บรักษา",
+"tips":"คำแนะนำเพิ่มเติม เช่น กินพร้อมอาหารได้ไหม ลืมกินทำอย่างไร"}`;
+
+  const text = await callAI({ system, json: true, maxTokens: 3000, contents: [{ role: 'user', parts: [{ text: prompt }] }] });
+  const raw = parseJSON(text, null) || parseJSON((text.match(/\{[\s\S]*\}/) || [''])[0], null);
+  if (!raw || typeof raw !== 'object') throw new HttpError(502, 'AI สรุปข้อมูลยาไม่สำเร็จ ลองใหม่อีกครั้ง');
+  const f = (k, max = 800) => str(Array.isArray(raw[k]) ? raw[k].join('\n') : raw[k], max);
+  const info = {
+    known: raw.known !== false,
+    commonName: f('commonName', 80),
+    oneLine: f('oneLine', 200),
+    thaiName: f('thaiName', 120),
+    scientificName: f('scientificName', 300),
+    brandNames: f('brandNames', 300),
+    drugClass: f('drugClass', 200),
+    properties: f('properties'),
+    indications: f('indications'),
+    howToUse: f('howToUse'),
+    contraindications: f('contraindications'),
+    cautions: f('cautions'),
+    sideEffects: f('sideEffects'),
+    interactions: f('interactions'),
+    pregnancy: f('pregnancy'),
+    storage: f('storage', 400),
+    tips: f('tips'),
+  };
+  info.usedFor = info.indications; // ชื่อเดิม ให้ส่วนอื่นของแอปใช้ต่อได้
+  if (info.known && (info.indications || info.howToUse)) {
+    db.prepare('INSERT OR REPLACE INTO medicine_ai_info (cache_key, data) VALUES (?, ?)').run(key, JSON.stringify(info));
+  }
+  res.json({ info, cached: false, disclaimer: DISCLAIMER });
 });
 
 router.get('/status', (_req, res) => {

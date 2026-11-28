@@ -63,11 +63,11 @@ async function requestModel(model, body) {
 }
 
 // เรียก Gemini: คืนข้อความคำตอบ หรือโยน HttpError พร้อมเหตุผลภาษาไทย
-async function callGemini({ system, contents, json = false }) {
+async function callGemini({ system, contents, json = false, maxTokens }) {
   const body = {
     system_instruction: { parts: [{ text: system }] },
     contents,
-    generationConfig: { temperature: 0.3, ...(json ? { responseMimeType: 'application/json' } : {}) },
+    generationConfig: { temperature: 0.3, ...(maxTokens ? { maxOutputTokens: maxTokens } : {}), ...(json ? { responseMimeType: "application/json" } : {}) },
   };
   const models = workingModel ? [workingModel, ...modelCandidates().filter((m) => m !== workingModel)] : modelCandidates();
   let last = null;
