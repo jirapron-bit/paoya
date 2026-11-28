@@ -37,7 +37,9 @@ function matchNames(text, names) {
 
 function ScanScreen({ openMedicine, isActive, askAI }) {
   const videoRef = useRef(null);
-  const fileRef = useRef(null);
+  const galleryRef = useRef(null); // เลือกรูปจากคลังรูป/ไฟล์ในเครื่อง
+  const cameraRef = useRef(null);  // เปิดแอปกล้องของมือถือถ่ายรูปนิ่ง (ชัดกว่าภาพจากกล้องสด)
+  const [preview, setPreview] = useState(null); // { url, img }
   const [hasCamera, setHasCamera] = useState(null); // null = กำลังเปิด
   const [live, setLive] = useState(true);
   const [ocrBusy, setOcrBusy] = useState(false);
@@ -134,30 +136,86 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
     }
   };
 
-  // อัปโหลดรูปฉลากจากเครื่อง
-  const onPickFile = async (e) => {
+  // นำเข้ารูปถ่าย: เลือกจากคลังรูป / ถ่ายด้วยแอปกล้อง / ลากมาวาง / วาง (Ctrl+V)
+  const openImage = async (file) => {
+    if (!file) return;
+    if (!/^image\//.test(file.type) && !/\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i.test(file.name || '')) {
+      toast('กรุณาเลือกไฟล์รูปภาพ', 'error');
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.src = url;
+    const ok = await img.decode().then(() => true).catch(() => false);
+    if (!ok) {
+      URL.revokeObjectURL(url);
+      toast('เปิดรูปนี้ไม่ได้ ลองเลือกรูปอื่น (รองรับ JPG, PNG)', 'error');
+      return;
+    }
+    setLive(false);
+    if (preview) URL.revokeObjectURL(preview.url);
+    setPreview({ url, img });
+    setStep('preview');
+  };
+
+  const onPickFile = (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file) return;
-    const img = new Image();
-    img.src = URL.createObjectURL(file);
-    await img.decode().catch(() => null);
-    setLive(false);
+    openImage(file);
+  };
+
+  const cancelPreview = () => {
+    if (preview) URL.revokeObjectURL(preview.url);
+    setPreview(null);
+    setStep('camera');
+    setLive(true);
+  };
+
+  const analyzePreview = async () => {
+    if (!preview) return;
     setStep('analyzing');
     let text = '';
     try {
       const T = await loadTesseract();
-      const { data } = await T.recognize(canvasFrom(img), 'eng');
+      const { data } = await T.recognize(canvasFrom(preview.img), 'eng');
       text = data.text || '';
     } catch { /* ถ้า OCR ไม่ได้ ให้ AI อ่านจากรูปอย่างเดียว */ }
-    await analyze(img, text);
-    URL.revokeObjectURL(img.src);
+    await analyze(preview.img, text);
   };
 
-  const closeResult = () => { setResult(null); setStep('camera'); setLive(true); };
+  // วางรูปจากคลิปบอร์ด (Ctrl+V) บนคอมพิวเตอร์
+  useEffect(() => {
+    if (!isActive) return undefined;
+    const onPaste = (e) => {
+      const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'));
+      if (item) openImage(item.getAsFile());
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [isActive, preview]);
+
+  const [dragging, setDragging] = useState(false);
+  const dropHandlers = {
+    onDragOver: (e) => { e.preventDefault(); setDragging(true); },
+    onDragLeave: () => setDragging(false),
+    onDrop: (e) => { e.preventDefault(); setDragging(false); openImage(e.dataTransfer.files?.[0]); },
+  };
+
+  const closeResult = () => {
+    if (preview) URL.revokeObjectURL(preview.url);
+    setPreview(null);
+    setResult(null);
+    setStep('camera');
+    setLive(true);
+  };
 
   return (
-    <div className="flex-1 bg-black h-full flex flex-col justify-between relative overflow-hidden">
+    <div className="flex-1 bg-black h-full flex flex-col justify-between relative overflow-hidden" {...dropHandlers}>
+      {dragging && (
+        <div className="absolute inset-0 z-[60] bg-[#004D25]/80 border-4 border-dashed border-white/70 m-3 rounded-3xl flex items-center justify-center text-white font-bold pointer-events-none">
+          ปล่อยรูปที่นี่เพื่อสแกน
+        </div>
+      )}
       <div className="w-full px-4 pt-4 pb-6 flex items-center justify-between z-30 text-white absolute top-0 left-0 bg-gradient-to-b from-black/70 to-transparent">
         <div className="flex items-center gap-2 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/15">
           <span className={`w-2 h-2 rounded-full ${live && hasCamera ? 'bg-green-400 animate-pulse' : 'bg-amber-400'}`} />
@@ -190,11 +248,12 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
           </div>
         )}
 
-        {hasCamera === false && (
-          <div className="text-center text-white/80 px-8 z-10">
-            <Icon name="camera" className="w-12 h-12 mx-auto mb-3 text-yellow-400" />
-            <p className="text-sm font-bold">เปิดกล้องไม่ได้</p>
-            <p className="text-xs text-white/60 mt-1">อนุญาตการใช้กล้องในเบราว์เซอร์ (ต้องเปิดผ่าน https หรือ localhost) หรืออัปโหลดรูปฉลากยาแทน</p>
+        {hasCamera === false && step === 'camera' && (
+          <div className="text-center text-white/80 px-8 z-10 -mt-24">
+            <Icon name="image" className="w-12 h-12 mx-auto mb-3 text-yellow-400" />
+            <p className="text-sm font-bold">นำเข้ารูปถ่ายยาเพื่อสแกน</p>
+            <p className="text-xs text-white/60 mt-1">เลือกรูปจากเครื่องด้านล่าง หรือลากรูปมาวางในหน้านี้ / กด Ctrl+V เพื่อวางรูป</p>
+            <p className="text-[11px] text-white/40 mt-3">(ใช้กล้องสดไม่ได้: ต้องอนุญาตกล้องในเบราว์เซอร์ และเปิดผ่าน https)</p>
           </div>
         )}
 
@@ -229,24 +288,57 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
           ) : hasCamera && (
             <p className="text-center text-white/75 text-xs">ให้เห็นชื่อยาบนแผง ซอง หรือกล่องชัด ๆ (เอียงได้ ไม่ต้องตรง) แล้วกดปุ่มด้านล่าง</p>
           )}
-          <div className="flex gap-2">
-            <button onClick={() => fileRef.current?.click()}
-              className="flex-1 bg-white/15 hover:bg-white/25 text-white font-bold py-3 rounded-full text-xs flex items-center justify-center gap-1.5 border border-white/20">
-              <Icon name="image" className="w-4 h-4" /> อัปโหลดรูป
+          {hasCamera && (
+            <button onClick={() => analyze(videoRef.current, rawText)}
+              className="w-full bg-[#388E3C] hover:bg-[#2e7d32] text-white font-bold py-3.5 rounded-full text-sm shadow-lg flex items-center justify-center gap-2 active:scale-95">
+              <Icon name="sparkles" className="w-4 h-4" /> ถ่ายแล้วให้ AI บอกว่าเป็นยาอะไร
             </button>
-            {hasCamera && (
-              <button onClick={() => analyze(videoRef.current, rawText)}
-                className="flex-[2] bg-[#388E3C] hover:bg-[#2e7d32] text-white font-bold py-3 rounded-full text-xs shadow-lg flex items-center justify-center gap-2 active:scale-95">
-                <Icon name="sparkles" className="w-4 h-4" /> ถ่ายแล้วให้ AI บอกว่าเป็นยาอะไร
-              </button>
-            )}
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => galleryRef.current?.click()}
+              className="bg-white/15 hover:bg-white/25 text-white font-bold py-3 rounded-full text-xs flex items-center justify-center gap-1.5 border border-white/20 active:scale-95">
+              <Icon name="image" className="w-4 h-4" /> เลือกจากคลังรูป
+            </button>
+            <button onClick={() => cameraRef.current?.click()}
+              className="bg-white/15 hover:bg-white/25 text-white font-bold py-3 rounded-full text-xs flex items-center justify-center gap-1.5 border border-white/20 active:scale-95">
+              <Icon name="camera" className="w-4 h-4" /> ถ่ายรูปใหม่
+            </button>
           </div>
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onPickFile} />
+          {/* ไม่ใส่ capture = ให้เลือกจากคลังรูปได้ (iPhone/Android จะมีตัวเลือก คลังรูป / ไฟล์ / กล้อง) */}
+          <input ref={galleryRef} type="file" accept="image/*" className="hidden" onChange={onPickFile} aria-label="เลือกรูปจากคลังรูป" />
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onPickFile} aria-label="ถ่ายรูปใหม่" />
+        </div>
+      )}
+
+      {step === 'preview' && preview && (
+        <div className="absolute inset-0 bg-black z-50 flex flex-col">
+          <div className="flex-1 min-h-0 flex items-center justify-center p-4 pt-6">
+            <img src={preview.url} alt="รูปที่เลือก" className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl" />
+          </div>
+          <div className="p-4 pb-nav space-y-2 bg-gradient-to-t from-black via-black/90 to-transparent">
+            <p className="text-center text-white/80 text-xs">ตรวจว่าเห็นชื่อยาชัด แล้วกด "ให้ AI อ่านรูปนี้"</p>
+            <button onClick={analyzePreview}
+              className="w-full bg-[#388E3C] hover:bg-[#2e7d32] text-white font-bold py-3.5 rounded-full text-sm shadow-lg flex items-center justify-center gap-2 active:scale-95">
+              <Icon name="sparkles" className="w-4 h-4" /> ให้ AI อ่านรูปนี้
+            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => galleryRef.current?.click()}
+                className="bg-white/15 text-white font-bold py-3 rounded-full text-xs border border-white/20 flex items-center justify-center gap-1.5">
+                <Icon name="image" className="w-4 h-4" /> เลือกรูปอื่น
+              </button>
+              <button onClick={cancelPreview}
+                className="bg-white/15 text-white font-bold py-3 rounded-full text-xs border border-white/20 flex items-center justify-center gap-1.5">
+                <Icon name="x" className="w-4 h-4" /> ยกเลิก
+              </button>
+            </div>
+          </div>
+          <input ref={galleryRef} type="file" accept="image/*" className="hidden" onChange={onPickFile} />
         </div>
       )}
 
       {step === 'analyzing' && (
         <div className="absolute inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col items-center justify-center text-white p-6">
+          {preview && <img src={preview.url} alt="" className="w-40 h-40 object-cover rounded-2xl mb-5 opacity-80" />}
           <div className="w-12 h-12 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mb-4" />
           <h4 className="font-bold text-base mb-1">กำลังอ่านฉลากยา...</h4>
           <p className="text-xs text-gray-300 text-center max-w-xs">อาจใช้เวลาสักครู่</p>
