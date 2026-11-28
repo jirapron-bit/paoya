@@ -27,12 +27,22 @@ function canvasFrom(source, maxSize = 1280) {
   return c;
 }
 
+// หาชื่อยาจากข้อความที่กล้องอ่านได้: ต้องเจอชื่อหลักครบทั้งคำ (ไม่ใช่แค่ขึ้นต้นเหมือน)
+// ถ้าเจอหลายตัว เลือกตัวที่คำในชื่อตรงกับข้อความมากที่สุด เช่น "Amoxicillin" ธรรมดา ไม่ใช่ "Amoxicillin + Clavulanate"
+const escapeRe = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 function matchNames(text, names) {
-  const lower = text.toLowerCase();
-  return names.find((n) => {
-    const first = n.name.toLowerCase().split(/[\s(,]/)[0];
-    return first.length >= 4 && new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(lower);
-  }) || null;
+  const lower = ` ${text.toLowerCase()} `;
+  const hasWord = (w) => new RegExp(`(^|[^a-z])${escapeRe(w)}([^a-z]|$)`).test(lower);
+  let best = null;
+  let bestScore = 0;
+  for (const n of names) {
+    const words = [...new Set(n.name.toLowerCase().split(/[^a-z0-9-]+/).filter((w) => w.length >= 4))];
+    if (!words.length || !hasWord(words[0])) continue;
+    const hit = words.filter(hasWord).length;
+    const score = hit * 10 - (words.length - hit); // คำตรงมาก = ดี, คำเกินที่ไม่เจอ = หักคะแนน
+    if (score > bestScore) { best = n; bestScore = score; }
+  }
+  return best;
 }
 
 // กันเปิดหน้ายาตัวเดิมซ้ำทันทีหลังกดย้อนกลับมาที่หน้าสแกน
@@ -114,6 +124,7 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
     if (!hasCamera || !live || step !== 'camera' || !isActive) return;
     let cancelled = false;
     let worker = null;
+    let misses = 0;
     (async () => {
       try {
         const T = await loadTesseract();
@@ -144,6 +155,7 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
             setRawText(text);
             const found = text.length >= 3 ? matchNames(text, nameList) : null;
             if (found) {
+              misses = 0;
               setLiveMatch(found);
               // อ่านเจอชื่อเดิมติดกัน 2 ครั้ง = มั่นใจพอ → เปิดหน้าข้อมูลยาให้อัตโนมัติ
               streak.current = streak.current.id === found.id
@@ -154,6 +166,8 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
               }
             } else {
               streak.current = { id: null, count: 0 };
+              misses += 1;
+              if (misses >= 3) setLiveMatch(null); // ไม่เห็นชื่อยาแล้ว ไม่ต้องค้างการ์ดเดิมไว้
             }
           } catch { /* ข้ามเฟรมนี้ */ }
           setOcrBusy(false);
@@ -291,13 +305,19 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
         <div className="flex items-center gap-2 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/15">
           <span className={`w-2 h-2 rounded-full ${live && hasCamera ? 'bg-green-400 animate-pulse' : 'bg-amber-400'}`} />
           <span className="text-[11px] font-medium">
-            {!hasCamera ? 'ไม่มีกล้อง' : live ? (ocrBusy ? 'กำลังอ่านตัวหนังสือ...' : 'อ่านฉลากสด') : 'หยุดภาพ'}
+            {!hasCamera ? 'ไม่มีกล้อง' : live ? (ocrBusy ? 'กำลังอ่าน...' : 'อ่านฉลากสด') : 'หยุดภาพ'}
           </span>
         </div>
         <div className="flex items-center gap-2">
           <span className={`text-[10px] px-2 py-1 rounded-full border ${status.data?.gemini ? 'border-green-400 text-green-300' : 'border-white/30 text-white/70'}`}>
             AI: {status.data?.gemini ? 'เปิด' : 'โหมดพื้นฐาน'}
           </span>
+          {step === 'camera' && (
+            <button onClick={() => galleryRef.current?.click()} aria-label="เพิ่มรูปถ่ายเพื่อสแกน"
+              className="px-3 py-1.5 bg-[#388E3C] hover:bg-[#2e7d32] rounded-full border border-white/30 text-xs font-bold flex items-center gap-1 shadow">
+              <Icon name="image" className="w-3.5 h-3.5" /> เพิ่มรูป
+            </button>
+          )}
           {hasCamera && (
             <button onClick={() => setLive(!live)}
               className="px-3 py-1.5 bg-black/50 hover:bg-black/70 backdrop-blur-md rounded-full border border-white/20 text-xs font-medium flex items-center gap-1">
