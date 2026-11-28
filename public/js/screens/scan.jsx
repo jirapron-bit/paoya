@@ -35,6 +35,36 @@ function matchNames(text, names) {
   }) || null;
 }
 
+// กันเปิดหน้ายาตัวเดิมซ้ำทันทีหลังกดย้อนกลับมาที่หน้าสแกน
+const AUTO_OPEN_COOLDOWN_MS = 30 * 1000;
+const AUTO_OPEN_DELAY_MS = 1500;
+function recentlyAutoOpened(id) {
+  try {
+    const v = JSON.parse(sessionStorage.getItem('paoya_auto_opened') || '{}');
+    return v.id === id && Date.now() - v.at < AUTO_OPEN_COOLDOWN_MS;
+  } catch { return false; }
+}
+function markAutoOpened(id) {
+  try { sessionStorage.setItem('paoya_auto_opened', JSON.stringify({ id, at: Date.now() })); } catch { /* ignore */ }
+}
+
+// เสียง "ติ๊ง" สั้น ๆ ตอนเจอยา
+function foundBeep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 1320;
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.25);
+    setTimeout(() => ctx.close(), 400);
+  } catch { /* บางเบราว์เซอร์ไม่อนุญาตให้เล่นเสียง */ }
+}
+
 function ScanScreen({ openMedicine, isActive, askAI }) {
   const videoRef = useRef(null);
   const galleryRef = useRef(null); // เลือกรูปจากคลังรูป/ไฟล์ในเครื่อง
@@ -47,6 +77,9 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
   const [blocks, setBlocks] = useState([]);
   const [rawText, setRawText] = useState('');
   const [liveMatch, setLiveMatch] = useState(null);
+  const [autoOpen, setAutoOpen] = useState(null); // ยาที่กำลังจะเปิดหน้าข้อมูลให้อัตโนมัติ
+  const streak = useRef({ id: null, count: 0 });   // อ่านเจอยาตัวเดิมติดกันกี่ครั้ง
+  const ignored = useRef(new Set());               // ยาที่ผู้ใช้กดยกเลิกการเปิดอัตโนมัติ
   const [step, setStep] = useState('camera'); // camera | analyzing | result
   const [result, setResult] = useState(null);
   const names = useApi('/medicines/names');
@@ -110,7 +143,18 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
             const text = words.map((w) => w.text).join(' ');
             setRawText(text);
             const found = text.length >= 3 ? matchNames(text, nameList) : null;
-            if (found) setLiveMatch(found);
+            if (found) {
+              setLiveMatch(found);
+              // อ่านเจอชื่อเดิมติดกัน 2 ครั้ง = มั่นใจพอ → เปิดหน้าข้อมูลยาให้อัตโนมัติ
+              streak.current = streak.current.id === found.id
+                ? { id: found.id, count: streak.current.count + 1 }
+                : { id: found.id, count: 1 };
+              if (streak.current.count >= 2 && !ignored.current.has(found.id) && !recentlyAutoOpened(found.id)) {
+                setAutoOpen((cur) => cur || found);
+              }
+            } else {
+              streak.current = { id: null, count: 0 };
+            }
           } catch { /* ข้ามเฟรมนี้ */ }
           setOcrBusy(false);
         }
@@ -134,6 +178,33 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
       setStep('camera');
       setLive(true);
     }
+  };
+
+  // เปิดหน้าข้อมูลยาอัตโนมัติหลังนับถอยหลังสั้น ๆ (กดยกเลิกได้)
+  useEffect(() => {
+    if (!autoOpen) return undefined;
+    setLive(false);
+    if (navigator.vibrate) navigator.vibrate(120);
+    foundBeep();
+    const t = setTimeout(() => openFound(autoOpen), AUTO_OPEN_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [autoOpen]);
+
+  // เปิดหน้าข้อมูลยา แล้วรีเซ็ตหน้าสแกนให้พร้อมสแกนใหม่เมื่อกดย้อนกลับมา
+  const openFound = (med) => {
+    markAutoOpened(med.id);
+    streak.current = { id: null, count: 0 };
+    setAutoOpen(null);
+    setLiveMatch(null);
+    setLive(true);
+    openMedicine({ id: med.id });
+  };
+
+  const cancelAutoOpen = () => {
+    if (autoOpen) ignored.current.add(autoOpen.id);
+    streak.current = { id: null, count: 0 };
+    setAutoOpen(null);
+    setLive(true);
   };
 
   // นำเข้ารูปถ่าย: เลือกจากคลังรูป / ถ่ายด้วยแอปกล้อง / ลากมาวาง / วาง (Ctrl+V)
@@ -276,7 +347,26 @@ function ScanScreen({ openMedicine, isActive, askAI }) {
               <p className="text-xs truncate text-white/90">{rawText}</p>
             </div>
           )}
-          {liveMatch ? (
+          {autoOpen ? (
+            <div className="bg-white rounded-2xl p-3.5 shadow-xl border-2 border-[#388E3C] space-y-3 pop-in" role="alert">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-green-100 text-[#2D7A4C] flex items-center justify-center flex-shrink-0">
+                  <Icon name="check-circle" className="w-6 h-6" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-bold text-[#2D7A4C]">พบยาแล้ว กำลังเปิดข้อมูลยา...</p>
+                  <p className="text-base font-bold text-gray-900 truncate">{autoOpen.name}</p>
+                </div>
+              </div>
+              <div className="h-1.5 bg-green-100 rounded-full overflow-hidden">
+                <div className="h-full bg-[#388E3C] rounded-full auto-open-bar" style={{ animationDuration: `${AUTO_OPEN_DELAY_MS}ms` }} />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="ghost" onClick={cancelAutoOpen}>ไม่ใช่ยานี้</Button>
+                <Button onClick={() => openFound(autoOpen)}>เปิดเลย</Button>
+              </div>
+            </div>
+          ) : liveMatch ? (
             <div className="bg-white rounded-2xl p-3.5 shadow-xl border-2 border-[#388E3C] flex items-center justify-between pop-in">
               <div className="pr-2 min-w-0">
                 <span className="text-[10px] bg-green-100 text-[#2D7A4C] font-bold px-2 py-0.5 rounded-full">พบยาในบัญชียาหลัก</span>
