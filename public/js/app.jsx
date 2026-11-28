@@ -102,10 +102,15 @@ function App() {
     return () => window.removeEventListener('paoya:logout', onLogout);
   }, []);
 
+  // ความเร็วเสียงอ่าน
+  useEffect(() => { tts.setRate(user?.settings?.tts?.rate || 'normal'); }, [user?.settings?.tts?.rate]);
+
   // โหมดตัวอักษรใหญ่
   useEffect(() => {
-    document.documentElement.classList.toggle('large-text', Boolean(user?.settings?.largeText));
-  }, [user?.settings?.largeText]);
+    // ทุกขนาดในแอปใช้หน่วย rem จึงขยายตามขนาดตัวอักษรของ <html> ทั้งหมด
+    document.documentElement.classList.remove('large-text');
+    document.documentElement.style.fontSize = `${user?.settings?.textSize || 16}px`;
+  }, [user?.settings?.textSize]);
 
   const onLoggedIn = ({ user: u }) => {
     api.setLoggedIn(true);
@@ -116,6 +121,7 @@ function App() {
 
   // afterServer: true = เซิร์ฟเวอร์ลบเซสชันไปแล้ว (เช่น ลบบัญชี) ไม่ต้องเรียก /auth/logout ซ้ำ
   const logout = async ({ afterServer = false } = {}) => {
+    tts.stop();
     if (!afterServer) await api.post('/auth/logout').catch(() => {});
     api.setLoggedIn(false);
     setUser(null);
@@ -186,8 +192,11 @@ function App() {
         <BottomNav screen={screen} go={go} />
       </div>
 
+      <ReminderCenter user={user} />
+
       {chat.open && (
         <ChatPanel key={chat.key} initialText={chat.initialText} messages={chatMessages} setMessages={setChatMessages}
+          autoSpeak={Boolean(user.settings.tts?.autoSpeak)}
           onClose={() => setChat((c) => ({ ...c, open: false }))} />
       )}
     </div>

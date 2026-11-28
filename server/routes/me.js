@@ -7,9 +7,21 @@ const { HttpError, str, num, int, parseJSON, validatePassword } = require('../ut
 const router = express.Router();
 
 const DEFAULT_SETTINGS = {
-  notifications: { enableAll: true, sound: true, vibrate: true, refillReminder: true },
+  notifications: {
+    enableAll: true, sound: true, vibrate: true, refillReminder: true,
+    medReminder: true,     // เตือนกินยาตามเวลา
+    speakReminders: true,  // อ่านชื่อยาออกเสียงตอนเตือน
+  },
+  tts: { autoSpeak: false, rate: 'normal' }, // อ่านคำตอบ AI อัตโนมัติ, ความเร็วเสียง
   largeText: false,
+  textSize: 16, // ขนาดตัวอักษรทั้งแอป (px) ปรับได้ 14-24
 };
+const TTS_RATES = ['slow', 'normal', 'fast'];
+// ขนาดตัวอักษรปรับได้อิสระระหว่าง 14-24 px (ละเอียดถึงทศนิยม 1 ตำแหน่ง)
+const TEXT_MIN = 14;
+const TEXT_MAX = 24;
+const validTextSize = (v) => typeof v === 'number' && Number.isFinite(v) && v >= TEXT_MIN && v <= TEXT_MAX;
+const roundTextSize = (v) => Math.round(v * 10) / 10;
 const BLOOD_TYPES = ['', 'A', 'B', 'AB', 'O'];
 
 function publicUser(u) {
@@ -30,6 +42,9 @@ function publicUser(u) {
       ...DEFAULT_SETTINGS,
       ...settings,
       notifications: { ...DEFAULT_SETTINGS.notifications, ...(settings.notifications || {}) },
+      tts: { ...DEFAULT_SETTINGS.tts, ...(settings.tts || {}) },
+      // ผู้ใช้เดิมที่เคยเปิด "ตัวอักษรใหญ่" ไว้ → เริ่มที่ 18
+      textSize: validTextSize(settings.textSize) ? settings.textSize : settings.largeText ? 18 : 16,
     },
   };
 }
@@ -73,8 +88,12 @@ router.put('/settings', (req, res) => {
   const b = req.body || {};
   const next = {
     largeText: typeof b.largeText === 'boolean' ? b.largeText : current.largeText,
+    textSize: validTextSize(b.textSize) ? roundTextSize(b.textSize) : current.textSize,
     notifications: { ...current.notifications },
+    tts: { ...current.tts },
   };
+  if (typeof b.tts?.autoSpeak === 'boolean') next.tts.autoSpeak = b.tts.autoSpeak;
+  if (TTS_RATES.includes(b.tts?.rate)) next.tts.rate = b.tts.rate;
   for (const k of Object.keys(DEFAULT_SETTINGS.notifications)) {
     if (typeof b.notifications?.[k] === 'boolean') next.notifications[k] = b.notifications[k];
   }

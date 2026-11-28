@@ -3,7 +3,7 @@
 // - ไฟล์หน้าเว็บของเรา: ดึงจากเซิร์ฟเวอร์ก่อน ถ้าเน็ตหลุดค่อยใช้ของในแคช (อัปเดตแล้วเห็นของใหม่ทันที)
 // - ไลบรารีจาก CDN (React, Tailwind, ฟอนต์): ใช้ของในแคชก่อน เพราะเวอร์ชันไม่เปลี่ยน
 // เมื่อแก้ไฟล์ในรายการ APP_SHELL ให้เพิ่มเลข VERSION เพื่อล้างแคชเก่า
-const VERSION = 'paoya-v4';
+const VERSION = 'paoya-v5';
 const SHELL_CACHE = `${VERSION}-shell`;
 const CDN_CACHE = `${VERSION}-cdn`;
 
@@ -25,6 +25,7 @@ const APP_SHELL = [
   '/js/screens/pharmacy.jsx',
   '/js/screens/settings.jsx',
   '/js/screens/chat.jsx',
+  '/js/screens/reminders.jsx',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/apple-touch-icon.png',
@@ -85,4 +86,15 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(cacheFirst(request));
   }
   // อย่างอื่น (เช่น Google Maps) ปล่อยให้เบราว์เซอร์จัดการตามปกติ
+});
+
+// กดที่การแจ้งเตือนกินยา → เปิดแอป
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const open = list.find((c) => c.url.startsWith(self.location.origin));
+      return open ? open.focus() : self.clients.openWindow('/');
+    })
+  );
 });

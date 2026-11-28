@@ -306,11 +306,21 @@ function ScanResult({ result, onClose, openMedicine, askAI }) {
               <h3 className="font-bold text-gray-900 text-base mt-0.5">ยังระบุยาไม่ได้</h3>
             )}
           </div>
-          <button onClick={onClose} aria-label="ปิด" className="text-gray-400 p-1"><Icon name="x" className="w-5 h-5" /></button>
+          <button onClick={() => { tts.stop(); onClose(); }} aria-label="ปิด" className="text-gray-400 p-1"><Icon name="x" className="w-5 h-5" /></button>
         </div>
 
         <div className="p-4 space-y-3 overflow-y-auto">
           <AllergyBanner warnings={result.allergyWarnings} />
+
+          {found && (
+            <div className="flex justify-end">
+              <SpeakButton id="scan-result" label="อ่านผลให้ฟัง" text={() => [
+                result.allergyWarnings?.length ? 'คำเตือน คุณเคยบันทึกว่าแพ้ยานี้ ห้ามใช้โดยไม่ปรึกษาแพทย์' : '',
+                `ยา ${title}`, r.strength, r.usedFor && `ใช้รักษา ${r.usedFor}`, r.howToUse && `วิธีใช้ ${r.howToUse}`,
+                r.labelInstruction && `วิธีใช้บนฉลาก ${r.labelInstruction}`, r.cautions && `ข้อควรระวัง ${r.cautions}`,
+              ].filter(Boolean).join('. ')} />
+            </div>
+          )}
 
           {!found && (
             <div className="bg-white p-4 rounded-2xl border border-gray-100 text-sm text-gray-600 space-y-2">

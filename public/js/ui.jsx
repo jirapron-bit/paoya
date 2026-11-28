@@ -324,3 +324,133 @@ function InstallBanner() {
     </div>
   );
 }
+
+// ---------- อ่านออกเสียง (Text-to-Speech) ----------
+// ใช้เสียงที่มากับเครื่อง (Web Speech API) ไม่มีค่าใช้จ่าย ไม่ต้องต่อ AI
+const tts = (() => {
+  const supported = typeof window !== 'undefined' && 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+  const RATES = { slow: 0.8, normal: 1, fast: 1.2 };
+  let rate = 'normal';
+  let thaiVoice = null;
+  const listeners = new Set();
+  let speakingId = null;
+
+  const pickVoice = () => {
+    if (!supported) return;
+    const voices = window.speechSynthesis.getVoices();
+    thaiVoice = voices.find((v) => /^th/i.test(v.lang) && /google|premium|enhanced|natural/i.test(v.name))
+      || voices.find((v) => /^th/i.test(v.lang)) || null;
+  };
+  if (supported) {
+    pickVoice();
+    window.speechSynthesis.addEventListener?.('voiceschanged', pickVoice);
+  }
+  const emit = () => listeners.forEach((fn) => fn(speakingId));
+
+  // ทำข้อความให้อ่านลื่น: ตัดอีโมจิ เครื่องหมาย markdown และขยายหน่วยยาที่พบบ่อย
+  const clean = (text) => String(text || '')
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ' ')
+    .replace(/[*_#`>•]/g, ' ')
+    .replace(/(\d+(?:\.\d+)?)\s*mg\b/gi, '$1 มิลลิกรัม')
+    .replace(/(\d+(?:\.\d+)?)\s*mcg\b/gi, '$1 ไมโครกรัม')
+    .replace(/(\d+(?:\.\d+)?)\s*ml\b/gi, '$1 มิลลิลิตร')
+    .replace(/(\d{1,2}):(\d{2})/g, (_, h, m) => `${Number(h)} นาฬิกา${m !== '00' ? ` ${Number(m)} นาที` : ''}`)
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  function stop() {
+    if (!supported) return;
+    window.speechSynthesis.cancel();
+    speakingId = null;
+    emit();
+  }
+
+  // id ใช้บอกว่าปุ่มไหนกำลังอ่านอยู่
+  function speak(text, id = 'default') {
+    if (!supported) return false;
+    window.speechSynthesis.cancel();
+    const body = clean(text);
+    if (!body) return false;
+    // แบ่งเป็นท่อนสั้น ๆ (บางเบราว์เซอร์หยุดอ่านเองถ้าข้อความยาวเกินไป)
+    const chunks = body.match(/[^.!?。\n]{1,180}(?:[.!?。\n]|$)|[^\s]{180,}/g) || [body];
+    speakingId = id;
+    emit();
+    chunks.forEach((chunk, i) => {
+      const u = new SpeechSynthesisUtterance(chunk.trim());
+      u.lang = 'th-TH';
+      if (thaiVoice) { try { u.voice = thaiVoice; } catch { /* ใช้เสียงเริ่มต้น */ } }
+      u.rate = RATES[rate] || 1;
+      if (i === chunks.length - 1) {
+        u.onend = () => { if (speakingId === id) { speakingId = null; emit(); } };
+      }
+      u.onerror = () => { speakingId = null; emit(); };
+      window.speechSynthesis.speak(u);
+    });
+    return true;
+  }
+
+  return {
+    supported,
+    speak,
+    stop,
+    setRate: (r) => { rate = r; },
+    hasThaiVoice: () => { pickVoice(); return Boolean(thaiVoice); },
+    subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+    get speakingId() { return speakingId; },
+  };
+})();
+
+function useSpeaking() {
+  const [id, setId] = useState(tts.speakingId);
+  useEffect(() => tts.subscribe(setId), []);
+  return id;
+}
+
+// ปุ่มลำโพง: กดอ่าน / กดอีกครั้งหยุด
+function SpeakButton({ text, id, label = 'อ่านออกเสียง', className = '', compact = false }) {
+  const speakingId = useSpeaking();
+  const myId = id || label + String(text).slice(0, 30);
+  if (!tts.supported) return null;
+  const active = speakingId === myId;
+  return (
+    <button type="button" onClick={(e) => { e.stopPropagation(); active ? tts.stop() : tts.speak(typeof text === 'function' ? text() : text, myId); }}
+      aria-label={active ? 'หยุดอ่าน' : label} aria-pressed={active}
+      className={`inline-flex items-center gap-1 font-bold transition-all active:scale-95 ${active ? 'text-white bg-[#388E3C]' : 'text-[#2D7A4C] bg-green-50 hover:bg-green-100'} ${compact ? 'p-1.5 rounded-full' : 'text-xs px-2.5 py-1.5 rounded-full'} ${className}`}>
+      <Icon name={active ? 'square' : 'volume'} className={compact ? 'w-4 h-4' : 'w-3.5 h-3.5'} />
+      {!compact && (active ? 'หยุด' : label)}
+    </button>
+  );
+}
+
+// ---------- เสียงเตือน ----------
+function playAlarm({ sound = true, vibrate = true } = {}) {
+  if (vibrate && navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+  if (!sound) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    [0, 0.35, 0.7].forEach((t) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.28);
+      o.connect(g).connect(ctx.destination);
+      o.start(ctx.currentTime + t);
+      o.stop(ctx.currentTime + t + 0.3);
+    });
+    setTimeout(() => ctx.close(), 1500);
+  } catch { /* บางเบราว์เซอร์ต้องแตะหน้าจอก่อนถึงจะเล่นเสียงได้ */ }
+}
+
+const nowHHMM = () => new Date().toTimeString().slice(0, 5);
+const minutesOf = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+const TIME_PRESETS = [
+  { time: '08:00', label: 'เช้า', icon: 'sunrise' },
+  { time: '12:00', label: 'กลางวัน', icon: 'sun' },
+  { time: '18:00', label: 'เย็น', icon: 'sunset' },
+  { time: '21:00', label: 'ก่อนนอน', icon: 'moon' },
+];
+const timeLabel = (t) => TIME_PRESETS.find((p) => p.time === t)?.label || '';

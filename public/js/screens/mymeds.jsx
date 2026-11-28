@@ -62,20 +62,59 @@ function RecordForm({ title, editing, initial, onSubmit, onCancel, children, sub
 const smallInput = 'w-full px-3 py-2 text-xs border border-gray-200 rounded-xl focus:outline-none focus:border-[#2D7A4C] bg-white';
 
 // ---------- ยาประจำ ----------
+// เลือกเวลาเตือนกินยา: ปุ่มลัด เช้า/กลางวัน/เย็น/ก่อนนอน + เพิ่มเวลาเอง
+function ReminderTimePicker({ value, onChange }) {
+  const [custom, setCustom] = useState('');
+  const toggle = (t) => onChange(value.includes(t) ? value.filter((x) => x !== t) : [...value, t].sort());
+  const addCustom = () => {
+    if (/^\d{2}:\d{2}$/.test(custom) && !value.includes(custom)) onChange([...value, custom].sort());
+    setCustom('');
+  };
+  return (
+    <div className="space-y-2">
+      <span className="text-xs text-gray-600 font-medium flex items-center gap-1"><Icon name="alarm" className="w-3.5 h-3.5" /> เวลาเตือนกินยา</span>
+      <div className="grid grid-cols-4 gap-1.5">
+        {TIME_PRESETS.map((p) => {
+          const on = value.includes(p.time);
+          return (
+            <button type="button" key={p.time} onClick={() => toggle(p.time)} aria-pressed={on}
+              className={`flex flex-col items-center py-2 rounded-xl border text-[11px] font-bold transition-all ${on ? 'bg-[#388E3C] text-white border-[#388E3C]' : 'bg-white text-gray-600 border-gray-200'}`}>
+              <Icon name={p.icon} className="w-4 h-4 mb-0.5" />{p.label}<span className="font-normal opacity-80">{p.time}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-1.5 items-center">
+        {value.filter((t) => !TIME_PRESETS.some((p) => p.time === t)).map((t) => (
+          <span key={t} className="text-[11px] bg-green-50 text-[#2D7A4C] border border-green-200 pl-2 pr-1 py-0.5 rounded-lg font-bold flex items-center gap-1">
+            {t} <button type="button" onClick={() => toggle(t)} aria-label={`ลบเวลา ${t}`} className="text-red-400"><Icon name="x" className="w-3 h-3" /></button>
+          </span>
+        ))}
+        <input type="time" value={custom} onChange={(e) => setCustom(e.target.value)} aria-label="เวลาอื่น" className={`${smallInput} w-28 py-1`} />
+        <button type="button" onClick={addCustom} disabled={!custom} className="text-[11px] font-bold text-[#2D7A4C] disabled:opacity-40">+ เพิ่มเวลา</button>
+      </div>
+    </div>
+  );
+}
+
 function MedsTab({ records }) {
-  const empty = { name: '', dosage: '', time: '', dailyDose: '1', totalCapacity: '30', stock: '' };
+  const empty = { name: '', dosage: '', time: '', dailyDose: '1', doseAmount: '1', reminderTimes: [], totalCapacity: '30', stock: '' };
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const hasTimes = form.reminderTimes.length > 0;
 
   const submit = async () => {
     const res = await records.save(editing?.id, form);
     if (res.allergyWarnings) toast(`ระวัง! คุณเคยบันทึกว่าแพ้ ${res.allergyWarnings[0].drugName}`, 'error');
-    else toast(editing ? 'บันทึกการแก้ไขแล้ว' : 'เพิ่มยาประจำแล้ว');
+    else toast(editing ? 'บันทึกการแก้ไขแล้ว' : hasTimes ? 'เพิ่มยาประจำและตั้งเวลาเตือนแล้ว' : 'เพิ่มยาประจำแล้ว');
+    window.dispatchEvent(new Event('paoya:doses-changed'));
     setEditing(null);
     setForm(empty);
   };
+
+  const withReminders = records.items.filter((m) => m.reminderTimes?.length);
 
   return (
     <div className="p-4 space-y-4">
@@ -86,12 +125,21 @@ function MedsTab({ records }) {
           <input placeholder="ขนาด (เช่น 500 mg)" value={form.dosage} onChange={set('dosage')} className={smallInput} aria-label="ขนาด" />
           <input placeholder="วิธีทาน (เช่น หลังอาหาร)" value={form.time} onChange={set('time')} className={smallInput} aria-label="วิธีทาน" />
         </div>
+        <ReminderTimePicker value={form.reminderTimes} onChange={(reminderTimes) => setForm({ ...form, reminderTimes })} />
         <div className="grid grid-cols-3 gap-2">
-          <Field label="ทานวันละ (เม็ด)"><input type="number" min="0" step="0.5" value={form.dailyDose} onChange={set('dailyDose')} className={smallInput} /></Field>
+          {hasTimes ? (
+            <Field label="ครั้งละ (เม็ด)" hint={`วันละ ${(Number(form.doseAmount) || 1) * form.reminderTimes.length} เม็ด`}>
+              <input type="number" min="0.25" step="0.25" value={form.doseAmount} onChange={set('doseAmount')} className={smallInput} />
+            </Field>
+          ) : (
+            <Field label="ทานวันละ (เม็ด)"><input type="number" min="0" step="0.5" value={form.dailyDose} onChange={set('dailyDose')} className={smallInput} /></Field>
+          )}
           <Field label="มีอยู่ (เม็ด)"><input type="number" min="0" value={form.stock} onChange={set('stock')} className={smallInput} /></Field>
           <Field label="บรรจุเต็ม"><input type="number" min="1" value={form.totalCapacity} onChange={set('totalCapacity')} className={smallInput} /></Field>
         </div>
       </RecordForm>
+
+      {withReminders.length > 0 && <CalendarReminderCard />}
 
       <div className="space-y-2">
         <h4 className="font-bold text-xs text-gray-500 px-1">รายการยาประจำของคุณ</h4>
@@ -102,9 +150,18 @@ function MedsTab({ records }) {
             <div className="min-w-0">
               <h5 className="font-bold text-sm text-gray-900">{item.name}</h5>
               <p className="text-xs text-gray-500 mt-0.5">ขนาด: {item.dosage || '-'} | วิธีทาน: {item.time || '-'} | วันละ {item.dailyDose} เม็ด</p>
+              {item.reminderTimes?.length > 0 ? (
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {item.reminderTimes.map((t) => (
+                    <span key={t} className="text-[10px] bg-green-50 text-[#2D7A4C] border border-green-200 px-1.5 py-0.5 rounded-md font-bold flex items-center gap-0.5">
+                      <Icon name="alarm" className="w-3 h-3" />{timeLabel(t) ? `${timeLabel(t)} ` : ''}{t}
+                    </span>
+                  ))}
+                </div>
+              ) : <p className="text-[10px] text-gray-400 mt-1">ยังไม่ได้ตั้งเวลาเตือน</p>}
             </div>
             <RowActions
-              onEdit={() => { setEditing(item); setForm({ name: item.name, dosage: item.dosage, time: item.time, dailyDose: String(item.dailyDose), totalCapacity: String(item.totalCapacity), stock: String(item.stock) }); }}
+              onEdit={() => { setEditing(item); setForm({ name: item.name, dosage: item.dosage, time: item.time, dailyDose: String(item.dailyDose), doseAmount: String(item.doseAmount ?? 1), reminderTimes: item.reminderTimes || [], totalCapacity: String(item.totalCapacity), stock: String(item.stock) }); }}
               onDelete={() => setConfirmDel(item)} />
           </div>
         ))}
@@ -113,8 +170,22 @@ function MedsTab({ records }) {
       {confirmDel && (
         <ConfirmModal title="ลบยาประจำ?" message={`ต้องการลบ ${confirmDel.name} ออกจากรายการใช่หรือไม่`} confirmText="ลบ" danger
           onCancel={() => setConfirmDel(null)}
-          onConfirm={async () => { try { await records.remove(confirmDel.id); toast('ลบแล้ว', 'info'); } catch (e) { toast(e.message, 'error'); } setConfirmDel(null); }} />
+          onConfirm={async () => { try { await records.remove(confirmDel.id); toast('ลบแล้ว', 'info'); window.dispatchEvent(new Event('paoya:doses-changed')); } catch (e) { toast(e.message, 'error'); } setConfirmDel(null); }} />
       )}
+    </div>
+  );
+}
+
+// ส่งการเตือนเข้าปฏิทินมือถือ (เตือนได้แม้ปิดแอป)
+function CalendarReminderCard() {
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3.5 space-y-2">
+      <p className="text-sm font-bold text-blue-800 flex items-center gap-1.5"><Icon name="bell-ring" className="w-4 h-4" /> ให้มือถือเตือนแม้ปิดแอป</p>
+      <p className="text-xs text-blue-700">แอปจะเตือนเมื่อเปิดอยู่ ถ้าอยากให้เตือนตลอด ให้เพิ่มเวลากินยาลงปฏิทินของมือถือ (ทำครั้งเดียว ถ้าเปลี่ยนเวลาค่อยเพิ่มใหม่)</p>
+      <button onClick={() => api.download(`/meds/reminders.ics?from=${todayISO()}`, 'paoya-reminders.ics').then(() => toast('ดาวน์โหลดแล้ว เปิดไฟล์เพื่อเพิ่มลงปฏิทิน')).catch((e) => toast(e.message, 'error'))}
+        className="w-full bg-white hover:bg-blue-100 text-blue-700 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border border-blue-200 active:scale-95">
+        <Icon name="calendar-plus" className="w-4 h-4" /> เพิ่มการเตือนกินยาลงปฏิทิน
+      </button>
     </div>
   );
 }

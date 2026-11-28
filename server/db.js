@@ -126,6 +126,30 @@ db.exec(`
   );
 `);
 
+// อัปเกรดฐานข้อมูลเดิม: เพิ่มคอลัมน์ใหม่ถ้ายังไม่มี (ข้อมูลเก่าไม่หาย)
+function addColumn(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+addColumn('my_meds', 'reminder_times', "TEXT NOT NULL DEFAULT '[]'"); // เวลาเตือน เช่น ["08:00","20:00"]
+addColumn('my_meds', 'dose_amount', 'REAL NOT NULL DEFAULT 1');         // ครั้งละกี่เม็ด
+
+// บันทึกการกินยาแต่ละมื้อ (กินแล้ว / ข้าม)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS dose_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    med_id INTEGER NOT NULL REFERENCES my_meds(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    time TEXT NOT NULL,
+    status TEXT NOT NULL,
+    amount REAL NOT NULL DEFAULT 0,
+    logged_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (med_id, date, time)
+  );
+  CREATE INDEX IF NOT EXISTS idx_dose_logs_user_date ON dose_logs(user_id, date);
+`);
+
 const MED_FIELDS = ['no', 'main_group', 'subgroup', 'generic_name', 'dosage_form', 'strength',
   'account_old', 'account_new', 'change_code', 'change_detail', 'conditions', 'remarks', 'announced_at'];
 

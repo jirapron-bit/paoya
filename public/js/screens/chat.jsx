@@ -3,7 +3,7 @@
 const CHAT_WELCOME = { id: 'welcome', sender: 'bot', text: 'สวัสดีครับ ผมคือเภสัชกร AI ผู้ช่วยเป๋ายา สอบถามเรื่องยา การทานยา หรือผลข้างเคียงได้เลยครับ 💊' };
 const CHAT_SUGGESTIONS = ['ลืมทานยาต้องทำอย่างไร', 'ยาก่อนอาหารต้องทานตอนไหน', 'ปวดหัวมีไข้ทานยาอะไรได้บ้าง', 'ควรเก็บยาอย่างไร'];
 
-function ChatPanel({ onClose, messages, setMessages, initialText }) {
+function ChatPanel({ onClose, messages, setMessages, initialText, autoSpeak = false }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const status = useApi('/ai/status');
@@ -21,7 +21,9 @@ function ChatPanel({ onClose, messages, setMessages, initialText }) {
     setSending(true);
     try {
       const res = await api.post('/ai/chat', { messages: next.filter((m) => m.id !== 'welcome') });
-      setMessages((prev) => [...prev, { id: Date.now() + 1, sender: 'bot', text: res.reply }]);
+      const botId = Date.now() + 1;
+      setMessages((prev) => [...prev, { id: botId, sender: 'bot', text: res.reply }]);
+      if (autoSpeak) tts.speak(res.reply, `chat-${botId}`);
     } catch (err) {
       setMessages((prev) => [...prev, { id: Date.now() + 1, sender: 'bot', text: `ขออภัย ${err.message}`, error: true }]);
     } finally {
@@ -46,18 +48,19 @@ function ChatPanel({ onClose, messages, setMessages, initialText }) {
             <p className="text-[10px] text-green-200">{status.data?.gemini ? 'ตอบโดย AI • รู้ประวัติแพ้ยาและยาประจำของคุณ' : 'โหมดพื้นฐาน (ตอบคำถามทั่วไป)'}</p>
           </div>
         </div>
-        <button onClick={onClose} aria-label="ปิดแชท" className="p-1 text-white/80 hover:text-white"><Icon name="x" className="w-6 h-6" /></button>
+        <button onClick={() => { tts.stop(); onClose(); }} aria-label="ปิดแชท" className="p-1 text-white/80 hover:text-white"><Icon name="x" className="w-6 h-6" /></button>
       </div>
 
       <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-gray-50">
         {messages.map((m) => (
-          <div key={m.id} className={`flex ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div key={m.id} className={`flex items-end gap-1 ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed shadow-sm whitespace-pre-line ${
               m.sender === 'user' ? 'bg-[#388E3C] text-white rounded-br-none'
                 : m.error ? 'bg-red-50 text-red-700 border border-red-100 rounded-bl-none'
                 : 'bg-white text-gray-800 rounded-bl-none border border-gray-100'}`}>
               {m.text}
             </div>
+            {m.sender === 'bot' && !m.error && <SpeakButton text={m.text} id={`chat-${m.id}`} label="ฟัง" compact className="flex-shrink-0 mb-1" />}
           </div>
         ))}
         {sending && (

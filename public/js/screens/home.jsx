@@ -136,6 +136,7 @@ function HomeScreen({ user, go, openMedicine, searchState, setSearchState }) {
 
       <div className="p-4 space-y-4">
         {!searching && <InstallBanner />}
+        {!searching && <TodayDosesCard go={go} />}
         {!searching && showRefill && (
           <button onClick={() => go('mymeds', { tab: 'stock' })}
             className="w-full text-left bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex items-center gap-3">

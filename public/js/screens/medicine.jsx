@@ -86,6 +86,14 @@ function MedicineDetailScreen({ medicineId, goBack, openMedicine, askAI }) {
             <p className="text-sm text-gray-600 mt-1">
               {m.dosageForm || '-'}{m.strength && m.strength !== 'ไม่ระบุ' ? ` • ${m.strength}` : ''}
             </p>
+            <div className="mt-3">
+              <SpeakButton id={`med-${m.id}`} text={() => [
+                `ยา ${m.genericName}`, m.dosageForm && `รูปแบบ ${m.dosageForm}`, m.strength && m.strength !== 'ไม่ระบุ' && `ความแรง ${m.strength}`,
+                m.subgroup && `กลุ่มยา ${m.subgroup}`, m.conditions && m.conditions !== 'ไม่มีเงื่อนไข' && `เงื่อนไขการใช้ ${m.conditions}`,
+                m.remarks && m.remarks !== 'ไม่มี' && `คำเตือน ${m.remarks}`,
+                data.allergyWarnings?.length ? 'คำเตือน คุณเคยบันทึกว่าแพ้ยานี้' : '',
+              ].filter(Boolean).join('. ')} />
+            </div>
             <div className="flex flex-wrap gap-1.5 mt-3">
               <span className="text-[11px] bg-green-50 text-[#2D7A4C] border border-green-200 px-2 py-0.5 rounded-full font-medium">{m.mainGroup}</span>
               <span className="text-[11px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-medium">{accountText(m.accountNew)}</span>
